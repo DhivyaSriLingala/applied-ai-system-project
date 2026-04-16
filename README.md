@@ -1,5 +1,9 @@
 # AI Bug Inspector — Applied AI System Project
 
+> 🎥 **Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/YOUR_LOOM_LINK_HERE) *(replace this link after recording)*
+> 
+> 💻 **GitHub:** [DhivyaSriLingala/applied-ai-system-project](https://github.com/DhivyaSriLingala/applied-ai-system-project)
+
 An applied AI system that combines **Retrieval-Augmented Generation (RAG)** and an **agentic multi-step reasoning pipeline** to automatically diagnose and fix bugs in Python code. Built on top of a prior Streamlit game project, this system demonstrates how a real-world AI application can integrate retrieval, orchestration, logging, guardrails, and automated testing into a cohesive product.
 
 ---
@@ -395,32 +399,75 @@ This fails because `APIStatusError` requires `response` (with `status_code` and 
 
 ---
 
+## Stretch Features (Optional +8 pts)
+
+| Feature | What was built | Measurable result |
+|---|---|---|
+| **RAG Enhancement** (+2) | 2 new KB files (exceptions, data structures); `rag_benchmark.py` offline benchmark | Retrieval: 8/15 → 15/15 queries passing (+46.7 pp); avg score 0.262 → 0.344 |
+| **Agentic Enhancement** (+2) | 4th Claude call — Verify step with `VERDICT/ADDRESSES_BUG/NEW_ISSUES/EXPLANATION`; public step methods; step-by-step progressive expander UI | 5 observable intermediate outputs; verdict color-coded per case |
+| **Few-Shot Specialization** (+2) | `FewShotDebuggingAgent` injects 3 worked examples into Plan prompt; sidebar mode toggle; `few_shot_benchmark.py` | Format compliance: 0/4 (0%) zero-shot → 4/4 (100%) few-shot (+100 pp) |
+| **Test Harness Enhancement** (+2) | 6 test cases (up from 4); `--json` flag; per-case confidence threshold; GRADE (A/B/C); verify verdict in output | 25/25 automated tests pass; eval harness reports GRADE |
+
+```bash
+# Run RAG benchmark (no API key needed)
+python rag_benchmark.py
+
+# Run few-shot benchmark demo (no API key needed)
+python few_shot_benchmark.py --demo
+
+# Run full live evaluation (requires API key)
+python tests/eval_suite.py
+
+# Machine-readable JSON output
+python tests/eval_suite.py --json
+```
+
+---
+
 ## Project Structure
 
 ```
 applied-ai-system-project/
-├── app.py                          # Streamlit UI (game tab + AI Bug Inspector tab)
-├── ai_agent.py                     # DebuggingAgent: Plan → Diagnose → Fix pipeline
-├── rag_engine.py                   # TF-IDF retrieval over knowledge_base/
-├── logic_utils.py                  # Original game logic (unchanged from Module 1)
-├── logger_config.py                # Centralized logging to console + logs/
+├── app.py                              # Streamlit UI — game tab + AI Bug Inspector tab
+├── ai_agent.py                         # DebuggingAgent: Plan->Diagnose->Fix->Verify
+├── few_shot_agent.py                   # FewShotDebuggingAgent: 3 worked examples in Plan
+├── rag_engine.py                       # TF-IDF retrieval over knowledge_base/
+├── rag_benchmark.py                    # Offline RAG quality benchmark (no API needed)
+├── few_shot_benchmark.py               # Few-shot vs zero-shot format comparison
+├── logic_utils.py                      # Original game logic (Module 1, unchanged)
+├── logger_config.py                    # Centralized logging: console + logs/YYYYMMDD.log
 ├── requirements.txt
 ├── knowledge_base/
-│   ├── python_common_bugs.txt      # Off-by-one, type comparison, logic inversion, etc.
-│   ├── streamlit_patterns.txt      # Session state, reruns, widget keys
-│   └── game_logic_patterns.txt     # Binary search, state machines, score formulas
+│   ├── python_common_bugs.txt          # Off-by-one, type comparison, logic inversion
+│   ├── streamlit_patterns.txt          # Session state, reruns, widget keys
+│   ├── game_logic_patterns.txt         # Binary search, state machines, score formulas
+│   ├── python_exceptions_guide.txt     # NEW: NameError, KeyError, TypeError, etc.
+│   └── data_structures_bugs.txt        # NEW: list mutation, shallow copy, int division
 ├── assets/
-│   ├── system_diagram.png          # Architecture diagram (rendered from .mmd)
-│   └── system_diagram.mmd          # Mermaid source for the diagram
-├── logs/                           # Date-stamped log files (auto-created at runtime)
+│   ├── system_diagram.png              # Architecture diagram
+│   └── system_diagram.mmd             # Mermaid source
+├── logs/                               # Auto-created at runtime
 ├── tests/
-│   ├── test_game_logic.py          # 5 tests — original game regression
-│   ├── test_rag.py                 # 6 tests — retrieval engine
-│   └── test_reliability.py         # 9 tests — agent pipeline (mocked API)
+│   ├── test_game_logic.py              # 5 tests — original game regression
+│   ├── test_rag.py                     # 6 tests — retrieval engine
+│   ├── test_reliability.py             # 14 tests — agent pipeline (mocked API)
+│   └── eval_suite.py                   # Live evaluation harness (6 cases, --json, GRADE)
 └── docs/
     ├── demo_win.png
     └── pytest_results.png
 ```
+
+---
+
+## Portfolio Artifact
+
+**GitHub:** [github.com/DhivyaSriLingala/applied-ai-system-project](https://github.com/DhivyaSriLingala/applied-ai-system-project)
+
+**Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/YOUR_LOOM_LINK_HERE) *(replace after recording)*
+
+### What this project says about me as an AI engineer
+
+I approach AI development the way I approach any engineering problem: structure first, measurement always. This project shows that I don't stop at "it works" — I ask *how do I know it works*, build a system to measure that, and then honestly document where it falls short. Every architectural decision here has a named trade-off: I chose TF-IDF over embeddings because frictionless setup matters for a portfolio project, and I documented exactly where that choice costs recall. I chose three sequential Claude calls over one because explainability matters more than latency in a debugging tool, and I wrote a test that proves the chain is wired correctly rather than just trusting it. I added confidence scoring not because it's decorative but because I don't think AI systems should present outputs without surfacing their own uncertainty. Building the Verify step taught me that an AI system that checks its own work is more trustworthy than one that doesn't, even when the self-check is imperfect. The thing this project says most clearly about me is that I think the space between "the AI gave an answer" and "the answer is reliable" is where the real engineering work lives — and I'm comfortable working in that space.
 
 ---
 
