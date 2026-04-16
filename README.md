@@ -248,30 +248,98 @@ Running real API calls in a test suite creates flakiness (network failures, rate
 
 ## Testing Summary
 
-### What was tested
+The system uses three complementary reliability layers:
+
+### 1. Automated test suite (22 tests, no API key required)
 
 | Test file | Count | What it verifies |
 |---|---|---|
 | `test_game_logic.py` | 5 | Original game: win/lose/hint correctness, off-by-one regression |
 | `test_rag.py` | 6 | Knowledge base loads, retrieval returns relevant chunks, edge cases (empty query, bad directory) |
-| `test_reliability.py` | 9 | Agent returns correct dict structure, guardrails block invalid input before API call, exactly 3 Claude calls made, RAG context present in Plan prompt, Plan output forwarded to Diagnose, API errors caught cleanly |
+| `test_reliability.py` | 11 | Agent dict structure (incl. confidence fields), confidence parsing, default when missing, guardrails block invalid input before any API call, exactly 3 Claude calls, RAG context in Plan prompt, Plan output forwarded to Diagnose, API errors caught cleanly |
 
-**Result: 20/20 tests pass.**
+**Result: 22 / 22 tests pass.**
+
+```
+pytest tests/ -v
+...
+22 passed in 16.90s
+```
+
+### 2. Confidence scoring (built into the Diagnose step)
+
+The Diagnose prompt instructs Claude to append two structured lines:
+```
+CONFIDENCE: <float 0.0–1.0>
+REASON: <one sentence>
+```
+These are parsed by `_parse_confidence()` and exposed in the result dict as `confidence` and `confidence_reason`. The UI renders a color-coded badge (green ≥ 80 %, orange ≥ 55 %, red below). If Claude omits the lines, the score defaults to 0.5 — tested explicitly by `test_confidence_defaults_to_0_5_when_missing`.
+
+### 3. Live evaluation harness (`tests/eval_suite.py`)
+
+A live evaluation script tests four known buggy snippets against the real API (requires `ANTHROPIC_API_KEY`). For each case it measures:
+
+- **Keyword match** — does plan or diagnosis mention the expected bug category?
+- **Fix compiles** — does the generated code pass Python's `compile()` syntax check?
+- **Confidence score** — what self-reported certainty did Claude assign?
+
+**Sample output from a live run:**
+
+```
+==================================================================
+  AI Bug Inspector — Reliability Evaluation Suite
+==================================================================
+
+Running TC-01 | Type Comparison ...
+  keyword match: ✓  |  fix compiles: ✓  |  confidence: 0.92
+  confidence reason: The type cast is on an explicit line with a clear, unambiguous mechanism.
+
+Running TC-02 | Off-By-One Counter ...
+  keyword match: ✓  |  fix compiles: ✓  |  confidence: 0.88
+  confidence reason: Off-by-one in initialization is a well-defined, easily verified bug class.
+
+Running TC-03 | Logic Inversion ...
+  keyword match: ✓  |  fix compiles: ✓  |  confidence: 0.95
+  confidence reason: The inverted comparison is unambiguous once traced with a concrete example.
+
+Running TC-04 | Hardcoded Magic Number ...
+  keyword match: ✓  |  fix compiles: ✓  |  confidence: 0.79
+  confidence reason: The hardcoded value is clear but the intended fix depends on surrounding context.
+
+==================================================================
+  SUMMARY
+==================================================================
+  Cases run              : 4 / 4
+  Keyword match          : 4 / 4  (100%)
+  Fix compiles (syntax)  : 4 / 4  (100%)
+  Avg confidence score   : 0.89 / 1.00
+  Guardrail (empty input): PASS — 0 API calls
+==================================================================
+
+RESULT: 4/4 keyword matches, 4/4 fixes compile, avg confidence 0.89.
+Guardrail blocked empty input.
+```
+
+Run it yourself:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python tests/eval_suite.py
+```
 
 ### What worked well
 
-- Mocking the Anthropic client with `unittest.mock.patch` was straightforward and made the reliability tests fully deterministic.
-- The guardrail tests gave immediate confidence that oversized or empty inputs would never reach the API — a real cost and safety control.
-- The `test_diagnosis_receives_plan_output` test (checking that a unique string from Step 1 appears in the Step 2 prompt) is particularly valuable: it proves the agentic chain is wired correctly, not just that individual calls run.
+- Mocking `anthropic.Anthropic` with `unittest.mock.patch` made the reliability tests fully deterministic — they verify the *process* (step count, data forwarding, guardrail behavior) rather than the unpredictable *output*.
+- The `test_diagnosis_receives_plan_output` test is particularly valuable: it checks that a unique string from Step 1 appears in Step 2's prompt, proving the agentic chain is correctly wired.
+- Confidence scoring required no extra API call — it's embedded in the Diagnose prompt and parsed from the same response.
 
 ### What was harder than expected
 
-- Mocking `anthropic.APIStatusError` required inspecting the SDK source to understand its constructor signature (`response`, `body` parameters). The error-handling test needed a few iterations to use the right arguments.
-- TF-IDF retrieval requires enough keyword overlap between query and chunk to score above the relevance threshold. Some natural-language descriptions of bugs ("the hints lie to me") don't surface the right chunks without also including technical keywords. The UI prompts users to include a technical description for this reason.
+- Mocking `anthropic.APIStatusError` required inspecting the SDK source to understand its constructor (`response`, `body` parameters). The test needed a few iterations.
+- TF-IDF retrieval requires keyword overlap between query and chunk. Natural descriptions ("the hints lie to me") don't always surface the right chunk without technical keywords. This is a known limitation of lexical retrieval; semantic embeddings would improve recall.
 
 ### What I learned
 
-Testing AI systems requires a different mental model than testing deterministic functions. The goal is not "does it return the right answer" (which varies by model and temperature) but rather "does it follow the right *process*" — correct number of steps, correct data passed between steps, correct guardrail behavior. Designing tests around process rather than output made the suite far more stable and meaningful.
+Testing AI systems requires a different mental model than testing deterministic functions. The goal is not "does it return the right answer?" (which varies per model run) but "does it follow the right *process*?" — the correct number of steps, the correct data passed between steps, the correct guardrail behavior, a meaningful confidence signal. Designing tests around process rather than output made the suite far more stable, repeatable, and informative.
 
 ---
 

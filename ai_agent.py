@@ -2,13 +2,25 @@
 Agentic debugging workflow powered by Claude and RAG.
 
 The DebuggingAgent runs three sequential Claude API calls:
-  1. Plan   — classify the type of bug present in the code
-  2. Diagnose — perform a detailed line-by-line analysis using the plan
-  3. Fix    — generate corrected code based on the diagnosis
+  1. Plan     — classify the type of bug present in the code
+  2. Diagnose — perform a detailed line-by-line analysis using the plan;
+                also asks Claude to self-report a confidence score (0.0–1.0)
+  3. Fix      — generate corrected code based on the diagnosis
 
 At every step, relevant documentation retrieved via RAGEngine is injected into
 the prompt so Claude reasons over domain-specific knowledge rather than
 relying on general training alone.
+
+Confidence Scoring
+------------------
+The Diagnose step instructs Claude to append two structured lines:
+    CONFIDENCE: <float>
+    REASON: <one sentence>
+
+These are parsed by _parse_confidence() and surfaced as separate fields in
+the result dict.  If Claude does not follow the format, the score defaults
+to 0.5 and the reason is "Not provided".  This lets callers (the UI and the
+eval harness) display and aggregate reliability signals without an extra call.
 
 Guardrails
 ----------
@@ -25,6 +37,7 @@ audit trail while the console stays readable.
 """
 
 import os
+import re
 import time
 import logging
 
@@ -38,6 +51,10 @@ logger = setup_logger("ai_bug_inspector")
 MAX_CODE_CHARS = 5_000
 MIN_CODE_CHARS = 5
 MODEL = "claude-sonnet-4-6"
+
+# Patterns used to extract the confidence block from the Diagnose response
+_CONF_RE = re.compile(r"\nCONFIDENCE:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+_REASON_RE = re.compile(r"\nREASON:\s*(.+)", re.IGNORECASE)
 
 
 class DebuggingAgent:
@@ -100,6 +117,37 @@ class DebuggingAgent:
         return text
 
     # ------------------------------------------------------------------
+    # Confidence scoring
+    # ------------------------------------------------------------------
+
+    def _parse_confidence(self, text: str) -> tuple[str, float, str]:
+        """
+        Extract CONFIDENCE and REASON lines from the Diagnose response.
+
+        Returns:
+            clean_text  — diagnosis with the structured lines removed
+            score       — float in [0.0, 1.0]; defaults to 0.5 if not found
+            reason      — one-sentence explanation; defaults to "Not provided"
+        """
+        conf_match = _CONF_RE.search(text)
+        reason_match = _REASON_RE.search(text)
+
+        if conf_match:
+            score = max(0.0, min(1.0, float(conf_match.group(1))))
+        else:
+            score = 0.5
+            logger.warning("CONFIDENCE line not found in diagnosis; defaulting to 0.5")
+
+        reason = reason_match.group(1).strip() if reason_match else "Not provided"
+
+        # Strip the two structured lines so they don't clutter the display text
+        clean = _CONF_RE.sub("", text)
+        clean = _REASON_RE.sub("", clean).strip()
+
+        logger.info("Confidence score: %.2f | Reason: %s", score, reason)
+        return clean, score, reason
+
+    # ------------------------------------------------------------------
     # Agentic workflow steps
     # ------------------------------------------------------------------
 
@@ -128,7 +176,10 @@ class DebuggingAgent:
                 "You are an expert Python debugger performing a deep diagnosis.\n"
                 "Given a preliminary bug classification, identify the exact line(s) causing "
                 "the bug, explain WHY the code fails, and describe what correct behavior "
-                "should look like."
+                "should look like.\n\n"
+                "After your diagnosis, append exactly these two lines (no extra text after them):\n"
+                "CONFIDENCE: <float from 0.0 to 1.0>\n"
+                "REASON: <one sentence explaining your confidence level>"
             ),
             user=(
                 f"RELEVANT DOCUMENTATION:\n{context_text}\n\n"
@@ -165,11 +216,13 @@ class DebuggingAgent:
         Run the full Plan → Diagnose → Fix pipeline.
 
         Returns a dict with keys:
-            error       — str if a guardrail or API error occurred, else None
-            plan        — str output of the planning step
-            diagnosis   — str output of the diagnosis step
-            fixed_code  — str output of the fix step
-            context     — list[str] of RAG chunks injected into the prompts
+            error              — str if a guardrail or API error occurred, else None
+            plan               — str output of the planning step
+            diagnosis          — str output of the diagnosis step (confidence lines stripped)
+            fixed_code         — str output of the fix step
+            context            — list[str] of RAG chunks injected into the prompts
+            confidence         — float in [0.0, 1.0]; Claude's self-reported certainty
+            confidence_reason  — str; one-sentence explanation of the confidence score
         """
         logger.info(
             "DebuggingAgent.run() | code_len=%d | desc=%r",
@@ -187,6 +240,8 @@ class DebuggingAgent:
                 "diagnosis": None,
                 "fixed_code": None,
                 "context": [],
+                "confidence": None,
+                "confidence_reason": None,
             }
 
         # Step 1: RAG retrieval — build context injected into every Claude call
@@ -202,7 +257,8 @@ class DebuggingAgent:
         # Steps 2–4: Plan → Diagnose → Fix (each call uses the previous output)
         try:
             plan = self._step_plan(code, description, context_text)
-            diagnosis = self._step_diagnose(code, description, context_text, plan)
+            raw_diagnosis = self._step_diagnose(code, description, context_text, plan)
+            diagnosis, confidence, confidence_reason = self._parse_confidence(raw_diagnosis)
             fixed_code = self._step_fix(code, diagnosis)
         except anthropic.APIError as exc:
             logger.error("Anthropic API error: %s", exc)
@@ -212,13 +268,17 @@ class DebuggingAgent:
                 "diagnosis": None,
                 "fixed_code": None,
                 "context": context_chunks,
+                "confidence": None,
+                "confidence_reason": None,
             }
 
-        logger.info("DebuggingAgent.run() completed successfully")
+        logger.info("DebuggingAgent.run() completed successfully | confidence=%.2f", confidence)
         return {
             "error": None,
             "plan": plan,
             "diagnosis": diagnosis,
             "fixed_code": fixed_code,
             "context": context_chunks,
+            "confidence": confidence,
+            "confidence_reason": confidence_reason,
         }

@@ -208,6 +208,18 @@ with tab_ai:
                 st.subheader("Step 2 — Detailed Diagnosis")
                 st.warning(result["diagnosis"])
 
+                if result.get("confidence") is not None:
+                    conf = result["confidence"]
+                    color = (
+                        "green" if conf >= 0.80
+                        else "orange" if conf >= 0.55
+                        else "red"
+                    )
+                    st.markdown(
+                        f"**Confidence:** :{color}[{conf:.0%}]"
+                        f"  —  *{result['confidence_reason']}*"
+                    )
+
                 st.subheader("Step 3 — Fixed Code")
                 st.markdown(result["fixed_code"])
 

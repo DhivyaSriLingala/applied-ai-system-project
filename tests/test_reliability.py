@@ -3,14 +3,16 @@ Reliability tests for the DebuggingAgent agentic pipeline.
 
 These tests use mocks to intercept Anthropic API calls so the suite runs
 without a real API key and without incurring costs.  They verify:
-  - The agent always returns the expected dict structure.
+  - The agent always returns the expected dict structure (including confidence).
+  - Confidence score is correctly parsed from the Diagnose response.
   - Guardrails block empty and oversized code before any API call.
   - The agentic workflow makes exactly 3 Claude calls (Plan, Diagnose, Fix).
   - RAG context is injected into the Plan step prompt.
+  - Plan output is forwarded into the Diagnose prompt.
   - Anthropic API errors are caught and surfaced cleanly rather than crashing.
 
 To run a live reliability check against the real API, set ANTHROPIC_API_KEY
-and run: pytest tests/test_reliability.py -m live
+and run: python tests/eval_suite.py
 """
 
 import os
@@ -61,19 +63,24 @@ SAMPLE_BUGGY_CODE = (
 
 @patch("ai_agent.anthropic.Anthropic")
 def test_agent_returns_expected_keys(mock_anthropic_cls):
-    """Agent output dict always contains the five required keys."""
+    """Agent output dict always contains all required keys including confidence fields."""
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.side_effect = [
         _mock_message("Type comparison bug."),
-        _mock_message("Line 2: secret cast to str causes int != str."),
+        _mock_message(
+            "Line 2: secret cast to str causes int != str.\n"
+            "CONFIDENCE: 0.92\n"
+            "REASON: The type cast is explicit and the mechanism is unambiguous."
+        ),
         _mock_message("```python\nif guess == int(secret):\n```\n- Removed str() cast."),
     ]
 
     agent = DebuggingAgent()
     result = agent.run(SAMPLE_BUGGY_CODE)
 
-    for key in ("error", "plan", "diagnosis", "fixed_code", "context"):
+    for key in ("error", "plan", "diagnosis", "fixed_code", "context",
+                 "confidence", "confidence_reason"):
         assert key in result, f"Missing key in result: {key}"
     assert result["error"] is None
 
@@ -226,3 +233,50 @@ def test_api_error_is_caught_and_returned_cleanly(mock_anthropic_cls):
     assert result["error"] is not None
     assert "API error" in result["error"] or "rate_limit" in result["error"].lower() or result["error"]
     assert result["plan"] is None
+
+
+# ---------------------------------------------------------------------------
+# Confidence scoring tests
+# ---------------------------------------------------------------------------
+
+@patch("ai_agent.anthropic.Anthropic")
+def test_confidence_score_parsed_from_diagnosis(mock_anthropic_cls):
+    """A CONFIDENCE line in the diagnosis is parsed into result['confidence']."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _mock_message("Off-by-one error."),
+        _mock_message(
+            "Counter starts at 1 instead of 0.\n"
+            "CONFIDENCE: 0.87\n"
+            "REASON: The initialization value is clearly wrong by exactly one."
+        ),
+        _mock_message("```python\ncounter = 0\n```\n- Fixed init."),
+    ]
+
+    agent = DebuggingAgent()
+    result = agent.run("counter = 1\ncounter += 1\nprint(counter)")
+
+    assert result["confidence"] == pytest.approx(0.87, abs=0.01)
+    assert "exactly one" in result["confidence_reason"].lower()
+    # Confidence lines should NOT appear in the display diagnosis
+    assert "CONFIDENCE:" not in result["diagnosis"]
+    assert "REASON:" not in result["diagnosis"]
+
+
+@patch("ai_agent.anthropic.Anthropic")
+def test_confidence_defaults_to_0_5_when_missing(mock_anthropic_cls):
+    """If Claude omits the CONFIDENCE line, the score defaults to 0.5 gracefully."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _mock_message("Some bug."),
+        _mock_message("Diagnosis with no confidence line at all."),
+        _mock_message("```python\nfixed = True\n```"),
+    ]
+
+    agent = DebuggingAgent()
+    result = agent.run("x = 1/0\nprint(x)")
+
+    assert result["confidence"] == pytest.approx(0.5, abs=0.01)
+    assert result["confidence_reason"] == "Not provided"
