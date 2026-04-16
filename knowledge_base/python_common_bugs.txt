@@ -1,0 +1,39 @@
+Off-By-One Errors
+Off-by-one errors occur when a loop or condition uses the wrong boundary by one step. Common in array indexing, loop ranges, and counter initialization.
+
+Example: Initializing an attempt counter at 1 instead of 0 causes display errors — "Attempts left: 7" when the player hasn't guessed yet.
+
+Fix: Always initialize counters at 0. When displaying remaining attempts use (limit - attempts) where attempts starts at 0.
+
+Type Comparison Bugs
+Comparing values of different types (int vs str) in Python 3 causes unexpected behavior. The equality operator == silently returns False for int vs str comparisons, and < / > raise TypeError.
+
+Example: Checking if guess == secret where secret was accidentally cast to str via str(secret) means an int guess will never equal a str secret, making a win condition unreachable.
+
+Fix: Cast both sides to the same type before comparing. For numeric guessing games always cast both guess and secret to int() before any comparison.
+
+Logic Inversion Bugs
+A logic inversion bug swaps the meaning of a condition, often caused by copying code and forgetting to flip the comparison operator.
+
+Example: Returning "Too High" when guess < secret and "Too Low" when guess > secret — the hints are backwards.
+
+Fix: Trace through each branch with a concrete example (e.g., guess=30, secret=50: 30 < 50 means the guess is too LOW) to verify the correct message is returned for each case.
+
+Hardcoded Magic Numbers
+Hardcoding numbers or strings instead of using variables creates drift bugs where the display and the logic fall out of sync.
+
+Example: Showing "Guess a number between 1 and 100" in the UI even when the difficulty range is 1–20. The sidebar shows the correct range but the instruction is wrong.
+
+Fix: Always derive display values from the same source-of-truth variables used by the logic. If get_range_for_difficulty() returns (low, high), use those same variables everywhere.
+
+Mutable Default Arguments
+Using mutable objects (lists, dicts) as default function arguments in Python is a common pitfall — the mutable default is shared across all calls to the function.
+
+Example: def record_guess(history=[]): history.append(guess) will accumulate guesses across all calls because the same list is reused.
+
+Fix: Use None as the default and initialize inside the function body: if history is None: history = []
+
+Missing Return Value Handling
+Functions that sometimes return None implicitly and sometimes return a value can cause AttributeError or TypeError when callers assume a non-None result.
+
+Fix: Always return an explicit value from every code path. Use Optional[type] annotations to document that None is possible.

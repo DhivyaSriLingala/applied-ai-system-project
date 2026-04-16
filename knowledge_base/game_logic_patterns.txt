@@ -1,0 +1,45 @@
+Binary Search Guessing Strategy
+The optimal strategy for a number guessing game is binary search: always guess the midpoint of the current valid range.
+
+Given a range [low, high], the optimal next guess is: mid = (low + high) // 2
+
+After each hint update the range:
+- "Too High" response: new range is [low, guess - 1]
+- "Too Low" response: new range is [guess + 1, high]
+
+Binary search guarantees finding any number in at most ceil(log2(range_size)) guesses. For range 1–100 this is 7 guesses. For range 1–20 this is 5 guesses.
+
+Attempt Counter Patterns
+Attempt counters should be incremented after input validation so that invalid (non-numeric) inputs do not consume an attempt. Whether invalid inputs count depends on game design — be explicit.
+
+Initialize attempt counters at 0. Display "Attempts left" as (limit - attempts). After the user submits, increment attempts, then check if attempts >= limit to detect game over.
+
+Score Calculation
+Score formulas should reward winning on fewer attempts:
+    score = base_points - (attempts_used * penalty_per_attempt)
+    score = max(score, minimum_points)  # prevent negative scores
+
+Avoid inconsistent bonuses or penalties that depend on attempt parity (e.g., only on even-numbered attempts) — this creates confusing score jumps that feel like bugs.
+
+Game State Machine
+A guessing game is naturally modeled as a state machine with three states: playing, won, lost.
+
+State transitions:
+    playing + correct_guess → won
+    playing + wrong_guess + attempts_exhausted → lost
+    playing + wrong_guess + attempts_remaining → playing (show hint, update history)
+
+Always check game state at the start of the submission handler and return early if the game is already in a terminal state (won or lost). This prevents multiple win/lose messages.
+
+New Game Reset Checklist
+When starting a new game, reset ALL of these:
+    - secret number (re-randomize using the current difficulty range, not hardcoded values)
+    - attempt counter (back to 0)
+    - game status (back to "playing")
+    - guess history (back to empty list)
+    - any displayed error or hint messages
+
+Forgetting to reset any of these causes state bleed where the old game's data appears in the new game.
+
+Range Validation
+Always validate that the user's guess falls within the active range before processing it. A guess outside the range is not illegal but the player should be warned, as it wastes an attempt.

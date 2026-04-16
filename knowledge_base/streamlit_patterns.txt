@@ -1,0 +1,30 @@
+Streamlit Execution Model
+Streamlit reruns the entire Python script from top to bottom on every user interaction — button click, text input, selectbox change, etc. Variables defined as plain Python variables are reset to their initial values on every rerun.
+
+To persist data across reruns, always store it in st.session_state. Session state survives reruns within the same browser session.
+
+Session State Initialization Pattern
+Always guard session state initialization with an "if key not in st.session_state" check. Without this guard, the value is overwritten on every rerun, erasing any changes made during the previous interaction.
+
+Correct pattern:
+    if "score" not in st.session_state:
+        st.session_state.score = 0
+
+Wrong pattern (resets every rerun):
+    st.session_state.score = 0
+
+The wrong pattern is the single most common Streamlit bug for new users. The secret number resetting on every guess submission is caused by missing this guard.
+
+Button Return Values
+A Streamlit button returns True only during the single rerun triggered by clicking it. On the next rerun the button returns False again. All logic that depends on a button click must update st.session_state immediately, because the button will be False by the next rerun.
+
+st.rerun() Forces an immediate rerun. Use it after mutating session state in response to a button if you need the UI to reflect the new state right away.
+
+Widget Key Parameter
+When multiple widgets of the same type exist (e.g., multiple text inputs), give each a unique key= parameter. Without unique keys, Streamlit can confuse their internal state. If a widget key changes between reruns (e.g., key="input_{difficulty}"), Streamlit treats it as a new widget and resets it.
+
+st.stop()
+Calling st.stop() halts script execution at that point for the current rerun. Use it to short-circuit rendering when a game is already over, preventing downstream input widgets from being shown.
+
+Selectbox and Session State Interaction
+A selectbox change triggers a full rerun. If game state (like the secret number) is stored correctly in session state with the initialization guard, changing the difficulty selectbox will NOT reset the game — it will just show updated labels. Always explicitly reset game state via a "New Game" button so the behavior is intentional.
