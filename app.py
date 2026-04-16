@@ -137,13 +137,26 @@ with tab_ai:
         "RAG-augmented multi-step reasoning."
     )
 
+    # --- Sidebar: agent mode toggle ---
+    agent_mode = st.sidebar.radio(
+        "Agent Mode",
+        ["Standard", "Few-Shot"],
+        index=0,
+        help=(
+            "Standard: zero-shot bug classification.\n"
+            "Few-Shot: 3 worked examples injected into the Plan step for "
+            "more structured, consistent output."
+        ),
+    )
+
     st.info(
-        "**How it works:** \n\n"
-        "1. **RAG** — relevant debugging docs are retrieved from a local knowledge base "
-        "and injected into every Claude prompt.\n"
-        "2. **Plan** — Claude classifies the bug type using the retrieved context.\n"
-        "3. **Diagnose** — Claude performs a deep line-level analysis, informed by the plan.\n"
-        "4. **Fix** — Claude generates corrected code, informed by the diagnosis.\n\n"
+        "**How it works (4 observable steps):**\n\n"
+        "0. **RAG** — top-3 docs retrieved from the knowledge base; injected into every prompt.\n"
+        "1. **Plan** — Claude classifies the bug type.\n"
+        "2. **Diagnose** — Claude performs a deep line-level analysis + self-rates confidence.\n"
+        "3. **Fix** — Claude generates corrected code.\n"
+        "4. **Verify** — Claude compares original vs fixed and issues a VERIFIED / "
+        "NEEDS_REVIEW / UNCERTAIN verdict.\n\n"
         "Set `ANTHROPIC_API_KEY` in your environment before running.",
         icon="ℹ️",
     )
@@ -179,53 +192,136 @@ with tab_ai:
                 "```\nexport ANTHROPIC_API_KEY=sk-ant-...\n```"
             )
         else:
-            logger.info("AI Bug Inspector triggered | code_len=%d", len(code_input))
-            with st.spinner("Running AI debugging agent (Plan → Diagnose → Fix)…"):
-                from ai_agent import DebuggingAgent
+            logger.info(
+                "AI Bug Inspector triggered | mode=%s | code_len=%d",
+                agent_mode, len(code_input),
+            )
 
-                agent = DebuggingAgent()
-                result = agent.run(code_input, desc_input)
-
-            if result["error"]:
-                st.error(f"**Error:** {result['error']}")
-                logger.warning("Agent returned error: %s", result["error"])
+            # Instantiate agent based on mode selection
+            if agent_mode == "Few-Shot":
+                from few_shot_agent import FewShotDebuggingAgent
+                agent = FewShotDebuggingAgent()
+                st.caption(f"Mode: {FewShotDebuggingAgent.describe_mode()}")
             else:
-                # Show retrieved RAG context so the user can see what docs informed the AI
-                if result["context"]:
-                    with st.expander("📚 Retrieved Knowledge Base Context (RAG)", expanded=False):
+                from ai_agent import DebuggingAgent
+                agent = DebuggingAgent()
+
+            # --- Step-by-step execution with progressive UI ---
+            status_text = st.empty()
+
+            # Guardrail check first (no API call)
+            valid, err_msg = agent._validate_input(code_input)
+            if not valid:
+                st.error(f"**Input rejected:** {err_msg}")
+                logger.warning("Guardrail rejected input: %s", err_msg)
+            else:
+                # Step 0 — RAG retrieval
+                status_text.info("Step 0 / 4 — Retrieving relevant documentation...")
+                context_chunks, context_text = agent.retrieve(code_input, desc_input)
+
+                with st.expander(
+                    f"📚 Step 0 — Retrieved Knowledge Base Context"
+                    f" ({len(context_chunks)} chunks)",
+                    expanded=False,
+                ):
+                    if context_chunks:
                         st.caption(
-                            "These documentation chunks were retrieved and injected into "
-                            "every Claude prompt."
+                            "These chunks were injected into every Claude prompt. "
+                            "They ground the AI's reasoning in documented patterns."
                         )
-                        for i, chunk in enumerate(result["context"], 1):
+                        for i, chunk in enumerate(context_chunks, 1):
                             st.markdown(f"**Chunk {i}:**")
-                            st.text(chunk[:600] + ("…" if len(chunk) > 600 else ""))
-                            st.divider()
+                            st.text(chunk[:500] + ("..." if len(chunk) > 500 else ""))
+                            if i < len(context_chunks):
+                                st.divider()
+                    else:
+                        st.caption("No relevant chunks found for this query.")
 
-                st.subheader("Step 1 — Bug Classification (Plan)")
-                st.info(result["plan"])
+                # Step 1 — Plan
+                status_text.info("Step 1 / 4 — Classifying bug type (Plan)...")
+                try:
+                    plan = agent.step_plan(code_input, desc_input, context_text)
+                except Exception as exc:
+                    st.error(f"Plan step failed: {exc}")
+                    logger.error("Plan step error: %s", exc)
+                    st.stop()
 
-                st.subheader("Step 2 — Detailed Diagnosis")
-                st.warning(result["diagnosis"])
+                with st.expander("📋 Step 1 — Bug Classification (Plan)", expanded=True):
+                    st.info(plan)
 
-                if result.get("confidence") is not None:
-                    conf = result["confidence"]
-                    color = (
-                        "green" if conf >= 0.80
-                        else "orange" if conf >= 0.55
-                        else "red"
+                # Step 2 — Diagnose
+                status_text.info("Step 2 / 4 — Diagnosing exact bug location...")
+                try:
+                    raw_diag = agent.step_diagnose(
+                        code_input, desc_input, context_text, plan
                     )
+                    diagnosis, confidence, confidence_reason = agent._parse_confidence(raw_diag)
+                except Exception as exc:
+                    st.error(f"Diagnose step failed: {exc}")
+                    logger.error("Diagnose step error: %s", exc)
+                    st.stop()
+
+                with st.expander("🔬 Step 2 — Detailed Diagnosis", expanded=True):
+                    st.warning(diagnosis)
+                    if confidence is not None:
+                        conf_color = (
+                            "green" if confidence >= 0.80
+                            else "orange" if confidence >= 0.55
+                            else "red"
+                        )
+                        st.markdown(
+                            f"**Confidence:** :{conf_color}[{confidence:.0%}]"
+                            f"  —  *{confidence_reason}*"
+                        )
+
+                # Step 3 — Fix
+                status_text.info("Step 3 / 4 — Generating corrected code...")
+                try:
+                    fixed_code = agent.step_fix(code_input, diagnosis)
+                except Exception as exc:
+                    st.error(f"Fix step failed: {exc}")
+                    logger.error("Fix step error: %s", exc)
+                    st.stop()
+
+                with st.expander("🔧 Step 3 — Fixed Code", expanded=True):
+                    st.markdown(fixed_code)
+
+                # Step 4 — Verify
+                status_text.info("Step 4 / 4 — Verifying the fix...")
+                try:
+                    raw_verify   = agent.step_verify(code_input, fixed_code, diagnosis)
+                    verification = agent._parse_verify(raw_verify)
+                except Exception as exc:
+                    st.error(f"Verify step failed: {exc}")
+                    logger.error("Verify step error: %s", exc)
+                    st.stop()
+
+                verdict       = verification["verdict"]
+                verdict_emoji = {"VERIFIED": "✅", "NEEDS_REVIEW": "⚠️"}.get(verdict, "❓")
+                verdict_color = {
+                    "VERIFIED": "green", "NEEDS_REVIEW": "orange"
+                }.get(verdict, "red")
+
+                with st.expander(
+                    f"{verdict_emoji} Step 4 — Verification: {verdict}", expanded=True
+                ):
                     st.markdown(
-                        f"**Confidence:** :{color}[{conf:.0%}]"
-                        f"  —  *{result['confidence_reason']}*"
+                        f"**Verdict:** :{verdict_color}[{verdict}]  |  "
+                        f"**Addresses Bug:** {verification['addresses_bug']}  |  "
+                        f"**New Issues:** {verification['new_issues']}"
                     )
+                    st.caption(verification["explanation"])
 
-                st.subheader("Step 3 — Fixed Code")
-                st.markdown(result["fixed_code"])
-
-                logger.info("AI Bug Inspector render complete")
+                status_text.success(
+                    f"Analysis complete — {verdict_emoji} {verdict}"
+                )
+                logger.info(
+                    "AI Bug Inspector complete | verdict=%s | confidence=%.2f",
+                    verdict, confidence,
+                )
 
     st.divider()
     st.caption(
-        "AI Bug Inspector | RAG + Agentic Workflow | Powered by Claude claude-sonnet-4-6"
+        "AI Bug Inspector | RAG + Agentic Workflow (Plan→Diagnose→Fix→Verify)"
+        " | Standard & Few-Shot modes | Powered by Claude claude-sonnet-4-6"
     )

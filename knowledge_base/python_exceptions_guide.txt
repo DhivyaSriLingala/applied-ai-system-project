@@ -1,0 +1,40 @@
+NameError and Scope Errors
+NameError is raised when a variable is referenced before it has been assigned in the current scope. The most common cause is a variable that is only assigned inside an if-block or try-block and then referenced afterward in code that runs even when the block did not execute.
+
+Example: result is assigned only inside an if condition, then used outside. If the condition is False the name result is never bound and the reference raises NameError: name 'result' is not defined.
+
+Fix: Always assign a safe default before the conditional block. For example, set result = None before the if-block and check if result is not None before using it. This guarantees the name exists regardless of which branches execute.
+
+KeyError in Dictionaries
+KeyError is raised when code accesses a dictionary key that does not exist. It is distinct from AttributeError (wrong attribute on an object) and IndexError (out-of-bounds on a sequence). KeyError is often caused by assuming a key is present based on logic elsewhere in the code.
+
+Fix: Use dict.get(key, default) to return a fallback value instead of raising. Use the in operator to guard access: if key in my_dict. Use collections.defaultdict for counters, groupers, or accumulators where missing keys should be created automatically.
+
+IndexError in Lists and Sequences
+IndexError is raised when accessing a list, tuple, or string at an index that is out of range. Off-by-one errors in loop ranges are the leading cause: range(1, len(items)) skips index 0; range(0, len(items) + 1) overshoots the last valid index.
+
+Fix: Use range(len(items)) for index-based loops or iterate directly with for item in items to avoid manual index math. Always validate that an index i satisfies 0 <= i < len(sequence) before using it. Use list slicing (items[start:end]) instead of manual index loops when possible.
+
+TypeError: Unsupported Operand Types
+TypeError is raised when an operation is applied to values of incompatible types, for example adding an int to a str, or calling len() on a number. User input from input(), web forms, or command-line arguments is always a string; performing arithmetic on it without conversion always raises TypeError.
+
+Fix: Convert user inputs to the expected type at the point of entry using int(), float(), or str(). Wrap conversions in try/except ValueError to handle non-numeric input gracefully rather than crashing. Use isinstance(value, expected_type) to guard operations when the type is uncertain.
+
+AttributeError: NoneType Has No Attribute
+AttributeError on NoneType means a function returned None and the caller immediately tried to call a method on that return value. This is the most common symptom of a missing return statement: Python functions implicitly return None if execution reaches the end without a return.
+
+Example: result = process(data); result.strip() raises AttributeError: 'NoneType' object has no attribute 'strip' when process() has no return statement.
+
+Fix: Add an explicit return statement to every code path in any function that is expected to produce a value. Check return values for None before chaining method calls or attribute access. Use Optional[type] annotations to signal that None is a possible return.
+
+RecursionError: Maximum Recursion Depth Exceeded
+RecursionError occurs when a recursive function either has no valid base case or the base case is never reached because each recursive call does not reduce the problem toward termination. Passing an unchanged argument in a recursive call causes infinite recursion.
+
+Fix: Verify that every recursive call passes a strictly smaller input (n-1 for integers, a shorter slice for lists, a shorter substring for strings). Write and test the base case first before adding the recursive step. Python's default recursion limit is 1000; use iteration instead of recursion for problems with large input sizes.
+
+Exception Swallowing Anti-Pattern
+Using a bare except: or except Exception: block that silently passes hides the root cause of bugs. The program continues with corrupted or undefined state and the original error becomes nearly impossible to diagnose.
+
+Example: try: result = compute() except: pass — if compute() raises any error, the program continues with result unset.
+
+Fix: Catch only the specific exception type you expect. Log the exception before handling it. Re-raise unexpected exceptions with raise so they are visible. Never use pass alone in an except block for production code.

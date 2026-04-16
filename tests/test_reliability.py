@@ -3,16 +3,22 @@ Reliability tests for the DebuggingAgent agentic pipeline.
 
 These tests use mocks to intercept Anthropic API calls so the suite runs
 without a real API key and without incurring costs.  They verify:
-  - The agent always returns the expected dict structure (including confidence).
+  - The agent always returns the expected dict structure (including confidence
+    and verification keys).
   - Confidence score is correctly parsed from the Diagnose response.
-  - Guardrails block empty and oversized code before any API call.
-  - The agentic workflow makes exactly 3 Claude calls (Plan, Diagnose, Fix).
+  - Confidence defaults to 0.5 when Claude omits the CONFIDENCE line.
+  - Verify verdict is correctly parsed from the Verify response.
+  - Verify verdict defaults gracefully when Claude omits the VERDICT line.
+  - Guardrails block empty, whitespace-only, and oversized code before any
+    API call is made.
+  - The agentic workflow makes exactly 4 Claude calls (Plan, Diagnose, Fix,
+    Verify).
   - RAG context is injected into the Plan step prompt.
   - Plan output is forwarded into the Diagnose prompt.
   - Anthropic API errors are caught and surfaced cleanly rather than crashing.
 
-To run a live reliability check against the real API, set ANTHROPIC_API_KEY
-and run: python tests/eval_suite.py
+To run a live evaluation against the real API, set ANTHROPIC_API_KEY and run:
+    python tests/eval_suite.py
 """
 
 import os
@@ -31,16 +37,13 @@ from ai_agent import DebuggingAgent, MAX_CODE_CHARS
 # ---------------------------------------------------------------------------
 
 def _mock_message(text: str) -> MagicMock:
-    """Build a minimal mock that looks like an Anthropic Message object."""
-    content_block = MagicMock()
-    content_block.text = text
-
+    content = MagicMock()
+    content.text = text
     usage = MagicMock()
     usage.input_tokens = 100
     usage.output_tokens = 50
-
     msg = MagicMock()
-    msg.content = [content_block]
+    msg.content = [content]
     msg.usage = usage
     return msg
 
@@ -56,6 +59,14 @@ SAMPLE_BUGGY_CODE = (
     "        return 'Too Low'\n"
 )
 
+_VERIFY_RESPONSE = (
+    "VERDICT: VERIFIED\n"
+    "ADDRESSES_BUG: YES\n"
+    "NEW_ISSUES: NONE\n"
+    "EXPLANATION: The fix removes the str() cast and casts both sides to int, "
+    "correctly resolving the type comparison bug."
+)
+
 
 # ---------------------------------------------------------------------------
 # Structure tests
@@ -63,7 +74,7 @@ SAMPLE_BUGGY_CODE = (
 
 @patch("ai_agent.anthropic.Anthropic")
 def test_agent_returns_expected_keys(mock_anthropic_cls):
-    """Agent output dict always contains all required keys including confidence fields."""
+    """Agent output dict always contains all required keys including verification."""
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.side_effect = [
@@ -74,13 +85,14 @@ def test_agent_returns_expected_keys(mock_anthropic_cls):
             "REASON: The type cast is explicit and the mechanism is unambiguous."
         ),
         _mock_message("```python\nif guess == int(secret):\n```\n- Removed str() cast."),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
     result = agent.run(SAMPLE_BUGGY_CODE)
 
     for key in ("error", "plan", "diagnosis", "fixed_code", "context",
-                 "confidence", "confidence_reason"):
+                 "confidence", "confidence_reason", "verification"):
         assert key in result, f"Missing key in result: {key}"
     assert result["error"] is None
 
@@ -92,8 +104,9 @@ def test_agent_plan_is_nonempty_string(mock_anthropic_cls):
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.side_effect = [
         _mock_message("Off-by-one error in counter initialization."),
-        _mock_message("Counter starts at 1 instead of 0."),
+        _mock_message("Counter starts at 1 instead of 0.\nCONFIDENCE: 0.9\nREASON: Clear."),
         _mock_message("```python\ncounter = 0\n```\n- Corrected init."),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
@@ -141,7 +154,7 @@ def test_oversized_code_rejected_without_api_call(mock_anthropic_cls):
     mock_anthropic_cls.return_value = mock_client
 
     agent = DebuggingAgent()
-    result = agent.run("x = 1\n" * (MAX_CODE_CHARS // 5))  # well over the limit
+    result = agent.run("x = 1\n" * (MAX_CODE_CHARS // 5))
 
     assert result["error"] is not None
     mock_client.messages.create.assert_not_called()
@@ -152,20 +165,21 @@ def test_oversized_code_rejected_without_api_call(mock_anthropic_cls):
 # ---------------------------------------------------------------------------
 
 @patch("ai_agent.anthropic.Anthropic")
-def test_agent_makes_exactly_three_api_calls(mock_anthropic_cls):
-    """The Plan → Diagnose → Fix workflow always makes exactly 3 Claude calls."""
+def test_agent_makes_exactly_four_api_calls(mock_anthropic_cls):
+    """The Plan -> Diagnose -> Fix -> Verify workflow makes exactly 4 Claude calls."""
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.side_effect = [
         _mock_message("Logic inversion bug."),
-        _mock_message("The < and > signs are swapped."),
+        _mock_message("The < and > signs are swapped.\nCONFIDENCE: 0.9\nREASON: Clear."),
         _mock_message("```python\nif guess > secret: return 'Too High'\n```\n- Fixed."),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
     agent.run(SAMPLE_BUGGY_CODE)
 
-    assert mock_client.messages.create.call_count == 3
+    assert mock_client.messages.create.call_count == 4
 
 
 @patch("ai_agent.anthropic.Anthropic")
@@ -173,10 +187,11 @@ def test_rag_context_injected_into_plan_prompt(mock_anthropic_cls):
     """The Plan step prompt must contain the RAG context header."""
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _mock_message("Some bug classification.")
+    mock_client.messages.create.return_value = _mock_message(
+        "Some analysis.\nCONFIDENCE: 0.8\nREASON: OK."
+    )
 
     agent = DebuggingAgent()
-    # Provide a query that will surface at least one knowledge-base chunk
     agent.run(SAMPLE_BUGGY_CODE, description="type comparison bug")
 
     first_call = mock_client.messages.create.call_args_list[0]
@@ -195,19 +210,17 @@ def test_diagnosis_receives_plan_output(mock_anthropic_cls):
     plan_text = "UNIQUE_PLAN_OUTPUT_MARKER"
     mock_client.messages.create.side_effect = [
         _mock_message(plan_text),
-        _mock_message("Detailed diagnosis."),
+        _mock_message("Detailed diagnosis.\nCONFIDENCE: 0.8\nREASON: OK."),
         _mock_message("```python\nfixed = True\n```"),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
     agent.run(SAMPLE_BUGGY_CODE)
 
-    # The second call (Diagnose) should contain the first call's output
     second_call = mock_client.messages.create.call_args_list[1]
     user_content = second_call[1]["messages"][0]["content"]
-    assert plan_text in user_content, (
-        "Plan output was not forwarded to the Diagnose step."
-    )
+    assert plan_text in user_content, "Plan output was not forwarded to the Diagnose step."
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +244,6 @@ def test_api_error_is_caught_and_returned_cleanly(mock_anthropic_cls):
     result = agent.run(SAMPLE_BUGGY_CODE)
 
     assert result["error"] is not None
-    assert "API error" in result["error"] or "rate_limit" in result["error"].lower() or result["error"]
     assert result["plan"] is None
 
 
@@ -252,6 +264,7 @@ def test_confidence_score_parsed_from_diagnosis(mock_anthropic_cls):
             "REASON: The initialization value is clearly wrong by exactly one."
         ),
         _mock_message("```python\ncounter = 0\n```\n- Fixed init."),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
@@ -259,7 +272,6 @@ def test_confidence_score_parsed_from_diagnosis(mock_anthropic_cls):
 
     assert result["confidence"] == pytest.approx(0.87, abs=0.01)
     assert "exactly one" in result["confidence_reason"].lower()
-    # Confidence lines should NOT appear in the display diagnosis
     assert "CONFIDENCE:" not in result["diagnosis"]
     assert "REASON:" not in result["diagnosis"]
 
@@ -273,6 +285,7 @@ def test_confidence_defaults_to_0_5_when_missing(mock_anthropic_cls):
         _mock_message("Some bug."),
         _mock_message("Diagnosis with no confidence line at all."),
         _mock_message("```python\nfixed = True\n```"),
+        _mock_message(_VERIFY_RESPONSE),
     ]
 
     agent = DebuggingAgent()
@@ -280,3 +293,65 @@ def test_confidence_defaults_to_0_5_when_missing(mock_anthropic_cls):
 
     assert result["confidence"] == pytest.approx(0.5, abs=0.01)
     assert result["confidence_reason"] == "Not provided"
+
+
+# ---------------------------------------------------------------------------
+# Verify step tests
+# ---------------------------------------------------------------------------
+
+@patch("ai_agent.anthropic.Anthropic")
+def test_verify_result_keys_present(mock_anthropic_cls):
+    """result['verification'] contains all required keys."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _mock_message("Type bug."),
+        _mock_message("Diagnosis.\nCONFIDENCE: 0.9\nREASON: Clear."),
+        _mock_message("```python\nfixed = True\n```"),
+        _mock_message(_VERIFY_RESPONSE),
+    ]
+
+    agent = DebuggingAgent()
+    result = agent.run(SAMPLE_BUGGY_CODE)
+
+    v = result["verification"]
+    assert v is not None
+    for key in ("verdict", "addresses_bug", "new_issues", "explanation", "raw"):
+        assert key in v, f"Missing key in verification dict: {key}"
+
+
+@patch("ai_agent.anthropic.Anthropic")
+def test_verify_verdict_parsed_correctly(mock_anthropic_cls):
+    """VERIFIED verdict is parsed and uppercased correctly."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _mock_message("Type bug."),
+        _mock_message("Diagnosis.\nCONFIDENCE: 0.9\nREASON: OK."),
+        _mock_message("```python\nfixed\n```"),
+        _mock_message(_VERIFY_RESPONSE),
+    ]
+
+    agent = DebuggingAgent()
+    result = agent.run(SAMPLE_BUGGY_CODE)
+
+    assert result["verification"]["verdict"] == "VERIFIED"
+    assert result["verification"]["addresses_bug"] == "YES"
+
+
+@patch("ai_agent.anthropic.Anthropic")
+def test_verify_defaults_to_uncertain_when_missing(mock_anthropic_cls):
+    """If Claude omits the VERDICT line, verdict defaults to UNCERTAIN."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _mock_message("Bug."),
+        _mock_message("Diagnosis.\nCONFIDENCE: 0.8\nREASON: OK."),
+        _mock_message("```python\nfixed\n```"),
+        _mock_message("No structured lines here — Claude forgot the format."),
+    ]
+
+    agent = DebuggingAgent()
+    result = agent.run(SAMPLE_BUGGY_CODE)
+
+    assert result["verification"]["verdict"] == "UNCERTAIN"

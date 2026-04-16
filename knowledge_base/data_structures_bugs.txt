@@ -1,0 +1,44 @@
+List Mutation During Iteration
+Modifying a list while iterating over it with a for loop causes elements to be skipped or double-processed. Python's for loop uses an internal index; when an element is removed the remaining elements shift, causing the iterator to skip the element that shifted into the deleted position.
+
+Example: Removing all even numbers from a list by calling list.remove() inside a for item in items loop will silently skip some elements each time a removal shifts the list.
+
+Fix: Iterate over a copy of the list with for item in items[:] and modify the original, or build a new list with a list comprehension: items = [x for x in items if condition(x)]. Never call list.remove(), list.pop(), or list.insert() on the list being iterated.
+
+Dictionary Mutation During Iteration
+Adding or removing keys from a dictionary while iterating over it raises RuntimeError: dictionary changed size during iteration in Python 3. Unlike lists, Python does not silently skip entries — it immediately raises an error.
+
+Fix: Collect keys to delete in a separate list first, then delete them in a second loop: keys_to_delete = [k for k, v in d.items() if condition(v)]; for k in keys_to_delete: del d[k]. Or build a new dictionary with a dict comprehension.
+
+Integer Division vs Float Division
+In Python 3 the / operator always returns a float even when both operands are integers. The // operator performs integer floor division. Using / when an integer result is needed produces floats in contexts that require ints, such as list indices or range arguments.
+
+Example: mid = (low + high) / 2 returns a float. Using mid directly as a list index raises TypeError: list indices must be integers or slices, not float. Binary search and other index-arithmetic algorithms require // not /.
+
+Fix: Use // for any division that must produce an integer result. Use int() to convert float results when the context demands it. Annotate variables that must remain integers with int type hints to catch mistakes early.
+
+Shallow Copy vs Deep Copy
+Assigning one list or dictionary to another variable with = copies the reference, not the data. Both variables point to the same object in memory, so mutating through either variable affects both.
+
+Example: board_copy = board creates an alias. Calling board_copy[0][0] = 'X' also modifies board because both names refer to the same nested list.
+
+Fix: Use list.copy() or list(original) for a one-level-deep copy of a flat list. Use dict.copy() for a flat dict. For nested structures — lists of lists, lists of dicts — use copy.deepcopy(original) to create a fully independent clone.
+
+String Immutability
+Strings in Python are immutable. Methods like str.replace(), str.upper(), str.strip(), and string concatenation all return a new string object — they do not modify the original string in place.
+
+Example: name.replace('_', ' ') does not change the value stored in name. The original variable is unchanged because no assignment was made.
+
+Fix: Always assign the result of string operations back to a variable: name = name.replace('_', ' '). When building a string incrementally in a loop, append parts to a list and join at the end: result = ''.join(parts). This is also significantly faster than repeated += concatenation.
+
+Counter Accumulation Errors
+Using += to accumulate into a variable that was never initialized raises UnboundLocalError. Using a module-level variable as an accumulator inside a function without declaring it global reads the global value but then Python creates a new local variable on assignment, leaving the global unchanged.
+
+Fix: Initialize all accumulators to a neutral value (0 for sums, [] for lists, {} for dicts) before the accumulation loop. Pass values in as function parameters and return results rather than using global state. For counting, use collections.Counter or a defaultdict(int) to avoid manual initialization.
+
+Boolean Short-Circuit Pitfall with Falsy Values
+Python's and and or operators short-circuit and return one of their operands, not True or False. The expression x or y returns x if x is truthy, otherwise y. This causes silent bugs when 0, empty string, empty list, or False are valid values that should not be replaced by the fallback.
+
+Example: score = user_score or default_score replaces user_score with default_score when user_score is 0, even though 0 is a legitimate score.
+
+Fix: Use explicit None checks: score = user_score if user_score is not None else default_score. Use is None and is not None rather than truthiness tests when zero, empty string, or empty list are meaningful values in the domain.
