@@ -345,22 +345,53 @@ Testing AI systems requires a different mental model than testing deterministic 
 
 ## Reflection
 
+> Full reflection, including the original Module 1–3 debugging journal, is in [reflection.md](reflection.md).
+
 ### What this project taught me about AI systems
 
 Building a retrieval-augmented agentic system made concrete something that is easy to miss when just calling an API: **the quality of an AI output is largely determined before the model ever sees the prompt**. The retrieval step, the guardrails, the way previous step outputs are formatted and forwarded — these structural decisions shape the final answer more than model temperature or prompt wording.
 
 The agentic pattern also showed the value of decomposition. A single "diagnose and fix this bug" prompt produces a serviceable answer. Breaking it into Plan → Diagnose → Fix — where each step's output becomes the next step's grounding context — produces more precise, more explainable results. This mirrors how a careful human developer approaches debugging: categorize first, then investigate the specific mechanism, then write the fix.
 
+### Limitations and biases
+
+**Lexical retrieval blindspot.** TF-IDF matches keywords, not meaning. A user who writes "the hints are lying to me" retrieves nothing useful; they need to write "inverted comparison" for the right chunk to surface. Beginners — the users who need help most — are least likely to use the technical language that the retrieval system understands.
+
+**No execution verification.** The Fix step produces code that passes Python's `compile()` check, but it never actually *runs*. A generated fix can be syntactically valid and still logically wrong. The system presents fixes with confidence it has not earned through execution.
+
+**Self-reported confidence ≠ calibrated accuracy.** The 0.89 average confidence score is Claude's subjective certainty, not an empirically measured accuracy rate. The UI displays confidence with a disclaimer ("This fix has not been executed or tested") for exactly this reason.
+
+**Training data bias.** Claude overrepresents popular, well-documented bugs from public code and Stack Overflow. Unusual bugs in niche domains or non-English codebases are likely to receive weaker diagnoses.
+
+### Potential misuse
+
+| Risk | Prevention |
+|---|---|
+| Pasting code with embedded secrets (API keys, passwords) — they get logged and sent to the API | Pre-scan input for secret patterns (`sk-`, `-----BEGIN`, `password =`); warn before processing |
+| Using the debugger as a vulnerability scanner — "debugging" is functionally equivalent to finding exploitable flaws | Rate limiting + logging makes systematic abuse detectable; terms of service creates accountability |
+| Deploying AI-generated fixes to production without review | UI always shows confidence score alongside disclaimer; framing is "possible fix" not "fixed code" |
+
+### What surprised me during reliability testing
+
+The confidence score was *lower* for the hardcoded magic number case (0.79) than for the logic inversion case (0.95). My intuition was that a simple number substitution would be easy to diagnose with certainty. But Claude's lower score reflects something real: the correct fix (`random.randint(low, high)`) depends on knowing what `low` and `high` are supposed to be, which requires understanding the surrounding system. The logic inversion bug is self-contained and verifiable with a single trace-through. Claude was more carefully calibrated than I expected.
+
+The second surprise was how much the pipeline amplified small errors. A vague Plan response produced a vague Diagnosis, which produced a Fix that targeted the wrong part of the code. The pipeline compounded the uncertainty. This confirmed that the Plan step is the most critical to get right — a bad plan does not get better with more reasoning.
+
+### AI collaboration: one helpful suggestion, one flawed one
+
+**Helpful:** When designing confidence scoring, my first instinct was to add a fourth Claude API call as a separate self-assessment step. Claude suggested embedding the confidence request at the end of the Diagnose step's system prompt instead — same response, parsed after the fact. This preserves the three-call pipeline (verified by the test that asserts `call_count == 3`) and adds zero latency or cost.
+
+**Flawed:** When writing the `APIStatusError` mock, Claude initially wrote:
+```python
+mock_client.messages.create.side_effect = anthropic.APIStatusError("rate_limit_error")
+```
+This fails because `APIStatusError` requires `response` (with `status_code` and `headers`) and `body` keyword arguments. Claude guessed at the interface without checking the SDK source. The fix required reading the actual constructor — a reminder that AI-generated code for library internals should always be verified against documentation.
+
 ### What I would do differently
 
-- **Semantic retrieval:** Replace TF-IDF with `sentence-transformers` embeddings. Natural-language bug descriptions would match relevant chunks far more reliably, even without technical keyword overlap.
-- **Streaming responses:** Display Claude's output token-by-token using the Anthropic streaming API so the user sees progress during the ~5-second pipeline rather than waiting for a spinner.
-- **Evaluation harness:** Build a small labeled dataset of buggy code snippets with known correct fixes, then measure the Fix step's accuracy automatically. This would turn the reliability tests from structural checks into outcome checks.
-- **Memory across sessions:** Log each debugging session's inputs and outputs, then use that history to fine-tune retrieval — surfacing chunks that were most useful for similar past bugs.
-
-### Final thought
-
-This project changed how I read AI-generated code. Every time the AI produces a fix, I now ask: *what context did it retrieve, what did it classify, what mechanism did it identify?* That question — tracing the reasoning chain rather than just accepting the answer — is the core skill this work taught me.
+- **Semantic retrieval:** Replace TF-IDF with `sentence-transformers` embeddings so natural-language bug descriptions retrieve relevant chunks without requiring technical keywords.
+- **Streaming responses:** Display Claude's output token-by-token so the user sees progress during the pipeline rather than watching a spinner.
+- **Execution sandbox:** Run the generated fix in a sandboxed Python subprocess and include the result ("Fix ran without errors" or the traceback) in the output panel.
 
 ---
 

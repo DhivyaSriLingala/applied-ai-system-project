@@ -1,4 +1,4 @@
-# 💭 Reflection: Game Glitch Investigator
+# 💭 Reflection: Game Glitch Investigator → AI Bug Inspector
 
 Answer each question in 3 to 5 sentences. Be specific and honest about what actually happened while you worked. This is about your process, not trying to sound perfect.
 
@@ -80,3 +80,73 @@ Next time I would verify the file paths the AI is editing before accepting any c
 - In one or two sentences, describe how this project changed the way you think about AI generated code.
 
 I used to assume AI-generated code was either right or wrong in an obvious way, but this project showed me it can be subtly wrong in ways that look fine at first glance — like hints that said "Go HIGHER" when the guess was already too high, or a counter that was always off by exactly one. AI is a powerful teammate but it still needs a human to read carefully, test deliberately, and catch the quiet bugs.
+
+---
+
+## 6. Responsible AI Reflection (Applied AI System Project)
+
+### What are the limitations or biases in your system?
+
+**Lexical retrieval blindspot.** The RAG engine uses TF-IDF, which matches keywords rather than meaning. A user who describes their bug as "the hints are lying to me" will not retrieve the Logic Inversion chunk because the words don't overlap — they'd need to write "inverted comparison" or "backwards condition." This is a real usability gap: non-technical descriptions, which are exactly what beginners write, are least likely to benefit from retrieval.
+
+**Narrow knowledge base.** The three knowledge base files cover Python game bugs, Streamlit session state, and guessing game patterns. Any code outside this domain — data science, web backends, async code — gets little RAG benefit and falls back on Claude's general training. The system appears equally confident in those cases but is reasoning without grounded context.
+
+**No execution verification.** The Fix step produces code that passes Python's `compile()` syntax check, but it never actually *runs* the code. A generated fix can be syntactically valid and still be logically wrong — it might fix the reported bug while introducing a new one. The system presents fixes with confidence it has not earned through testing.
+
+**Self-reported confidence is not calibrated accuracy.** The average confidence score across the four eval cases was 0.89. That is Claude's *subjective certainty*, not an empirically measured accuracy rate. Language models are known to be overconfident — the same model that claims 0.92 confidence on a correct fix might also claim 0.85 on a wrong one. Displaying this number without a disclaimer risks misleading users into trusting the output more than they should.
+
+**Training data bias toward common patterns.** Claude was trained on a large corpus of public code and Stack Overflow answers, which overrepresents popular, well-documented bugs in widely-used frameworks. Unusual bugs in niche domains, obfuscated code, or non-English codebases are likely to receive weaker diagnoses. The system will appear most reliable to the users who need it least.
+
+---
+
+### Could your AI be misused, and how would you prevent that?
+
+**Sensitive data exposure.** The most immediate risk is a user pasting code that contains secrets — API keys, database passwords, tokens embedded in a config. The current system logs the full code at DEBUG level and sends it to Anthropic's API. A developer who pastes a real production file could inadvertently exfiltrate credentials.
+
+*Prevention:* Add a regex pre-scan for patterns like `sk-`, `-----BEGIN`, `password =`, or anything resembling a secret, and warn the user before processing. Strip matched patterns before sending. Add a visible disclaimer in the UI: "Do not paste code containing API keys, passwords, or personal data."
+
+**Vulnerability scouting.** Asking the system to "debug" code is functionally equivalent to asking it to find exploitable flaws. An attacker could paste a target application's code and use the diagnosis to understand where the logic breaks down or where boundary conditions are wrong.
+
+*Prevention:* This is harder to prevent because the useful and harmful use cases share the same interface. The most practical mitigation is logging and rate limiting so that systematic, high-volume use (scanning many files) is detectable and interruptible. A terms-of-service agreement and account-based access would create accountability.
+
+**Misplaced trust in generated fixes.** If a developer deploys a Claude-generated fix without verifying it, they are betting on an LLM's judgment over their own. For security-sensitive code — authentication, input validation, cryptography — this could introduce new vulnerabilities while appearing to fix the old ones.
+
+*Prevention:* The UI should always display the confidence score alongside a reminder: "This fix has not been executed or tested. Review it before use." The system should also avoid presenting the fix as authoritative — "Here is a possible fix" is safer framing than "Fixed code."
+
+---
+
+### What surprised you while testing AI reliability?
+
+The result that surprised me most was that the confidence score was *lower* for the hardcoded magic number case (0.79) than for the logic inversion case (0.95). My intuition was that a simple number substitution bug would be easy to diagnose with high certainty. But Claude's lower confidence reflects something real: the correct fix — `random.randint(low, high)` — depends on knowing what `low` and `high` are supposed to be, which requires understanding the surrounding system. The logic inversion bug, by contrast, is self-contained and verifiable with a single trace-through. Claude was more carefully calibrated than I expected.
+
+The second surprise was how much the three-step pipeline amplified small errors. During early testing, a vague Plan response — one that used the word "bug" without naming a category — produced a Diagnosis that was similarly vague, and then a Fix that addressed a different part of the code than was actually broken. The pipeline compounded the uncertainty rather than correcting it. This taught me that the Plan step is the most important to get right: it sets the direction for everything downstream. A bad plan does not get better with more reasoning.
+
+---
+
+### Describe your collaboration with AI during this project
+
+Working with Claude throughout this project felt less like issuing commands to a tool and more like pair-programming with a fast, well-read colleague who occasionally misremembers details. Claude drafted most of the structural code — the agent pipeline, the RAG engine, the test suite — quickly and correctly on the first pass. The collaboration was genuinely productive, but it required active supervision.
+
+**One instance where the AI gave a helpful suggestion:**
+
+When I was designing the confidence scoring feature, my first instinct was to add a fourth Claude API call after the Fix step — a separate "self-assessment" prompt asking Claude to rate its own certainty. Claude suggested instead embedding the confidence request at the end of the Diagnose step's system prompt: instruct Claude to append `CONFIDENCE: X.X` and `REASON: ...` to the same response it was already generating, then parse those lines out. This approach adds zero latency and zero token cost beyond what the Diagnose step already spends. I verified it was cleaner by checking that the test suite still showed exactly three API calls — not four — which confirmed the pipeline structure was preserved.
+
+**One instance where the AI's suggestion was flawed:**
+
+When writing the test for `anthropic.APIStatusError`, Claude initially constructed the mock like this:
+
+```python
+mock_client.messages.create.side_effect = anthropic.APIStatusError("rate_limit_error")
+```
+
+This failed immediately because `APIStatusError` requires two additional keyword arguments — `response` (an HTTP response object with `status_code` and `headers`) and `body` (a dict describing the error). Claude had not checked the SDK's constructor signature and guessed at the interface. I had to look up the Anthropic Python SDK source to find the correct structure:
+
+```python
+anthropic.APIStatusError(
+    "rate_limit_error",
+    response=MagicMock(status_code=429, headers={}),
+    body={"error": {"type": "rate_limit_error"}},
+)
+```
+
+This is a common failure mode when AI generates code for third-party libraries: it knows the class exists and its general purpose, but guesses at the specifics. The fix was straightforward once I read the source, but it was a reminder that AI-generated code for library internals should always be verified against the actual documentation.
