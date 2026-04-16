@@ -1,0 +1,104 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f0f4ff"
+    primaryBorderColor: "#4f46e5"
+    primaryTextColor: "#1e1b4b"
+    lineColor: "#6366f1"
+    fontSize: "14px"
+---
+flowchart TD
+    %% ── Input ──────────────────────────────────────────────────────────
+    USER(["👤 Human User\nPastes buggy Python code\n+ optional description"])
+
+    %% ── UI ─────────────────────────────────────────────────────────────
+    UI["🖥️ Streamlit UI\nAI Bug Inspector tab — app.py"]
+
+    %% ── Guardrails ──────────────────────────────────────────────────────
+    GR{"🛡️ Guardrails\nInput Validation\nempty / too short / too long?"}
+    ERR["❌ Error returned to user\nno API call is made"]
+
+    %% ── RAG ─────────────────────────────────────────────────────────────
+    KB[("📚 Knowledge Base\npython_common_bugs.txt\nstreamlit_patterns.txt\ngame_logic_patterns.txt")]
+    RAG["🔍 RAG Engine — rag_engine.py\nTF-IDF vectorizer\nreturns top-3 relevant chunks"]
+
+    %% ── Agentic Pipeline ────────────────────────────────────────────────
+    PLAN["📋 Step 1 — Plan\nClassify bug type\nRAG context injected into prompt"]
+    DIAG["🔬 Step 2 — Diagnose\nLine-level analysis\nPlan output forwarded into prompt"]
+    FIX["🔧 Step 3 — Fix\nGenerate corrected code\nDiagnosis forwarded into prompt"]
+
+    %% ── LLM ─────────────────────────────────────────────────────────────
+    CLAUDE(["☁️ Claude claude-sonnet-4-6\nAnthropic API\n3 sequential calls"])
+
+    %% ── Logging ─────────────────────────────────────────────────────────
+    LOG[/"📋 Logger — logger_config.py\nlogs/YYYYMMDD.log\nlatency · token counts · full output"/]
+
+    %% ── Output ──────────────────────────────────────────────────────────
+    OUT["📤 Results Panel\nRAG Context shown · Plan · Diagnosis · Fixed Code"]
+
+    %% ── Human Review ────────────────────────────────────────────────────
+    REVIEW(["👤 Human Review\nUser reads and verifies the AI fix"])
+
+    %% ── Test Suite ──────────────────────────────────────────────────────
+    subgraph TESTS["🧪 Reliability and Test Suite — pytest — 20 tests total"]
+        direction LR
+        T1["test_game_logic.py\n5 tests — game logic regression"]
+        T2["test_rag.py\n6 tests — retrieval correctness"]
+        T3["test_reliability.py\n9 tests — agent pipeline\nmocked Anthropic API"]
+    end
+
+    %% ── Data Flow ───────────────────────────────────────────────────────
+    USER --> UI
+    UI --> GR
+    GR -->|"invalid"| ERR
+    ERR --> USER
+    GR -->|"valid"| RAG
+    KB --> RAG
+    RAG -->|"top-3 context chunks"| PLAN
+
+    PLAN -->|"code + RAG context"| CLAUDE
+    CLAUDE -->|"bug classification"| PLAN
+    PLAN -->|"plan result"| DIAG
+
+    DIAG -->|"code + context + plan"| CLAUDE
+    CLAUDE -->|"detailed diagnosis"| DIAG
+    DIAG -->|"diagnosis result"| FIX
+
+    FIX -->|"code + diagnosis"| CLAUDE
+    CLAUDE -->|"fixed code + change list"| FIX
+
+    FIX --> OUT
+    OUT --> UI
+    UI --> REVIEW
+    REVIEW -.->|"iterate if needed"| USER
+
+    PLAN --> LOG
+    DIAG --> LOG
+    FIX --> LOG
+
+    T2 -.->|"validates"| RAG
+    T3 -.->|"validates"| PLAN
+    T3 -.->|"validates"| DIAG
+    T3 -.->|"validates"| FIX
+
+    %% ── Styles ──────────────────────────────────────────────────────────
+    classDef human  fill:#dbeafe,stroke:#2563eb,color:#1e3a5f,font-weight:bold
+    classDef ui     fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef guard  fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef rag    fill:#f0fdf4,stroke:#16a34a,color:#14532d
+    classDef agent  fill:#faf5ff,stroke:#9333ea,color:#3b0764
+    classDef claude fill:#fce7f3,stroke:#db2777,color:#831843,font-weight:bold
+    classDef log    fill:#f1f5f9,stroke:#64748b,color:#1e293b
+    classDef output fill:#fff7ed,stroke:#ea580c,color:#7c2d12
+    classDef test   fill:#ecfdf5,stroke:#059669,color:#064e3b
+
+    class USER,REVIEW human
+    class UI ui
+    class GR,ERR guard
+    class KB,RAG rag
+    class PLAN,DIAG,FIX agent
+    class CLAUDE claude
+    class LOG log
+    class OUT output
+    class T1,T2,T3 test
