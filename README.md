@@ -1,6 +1,6 @@
 # AI Bug Inspector — Applied AI System Project
 
-> 🎥 **Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/YOUR_LOOM_LINK_HERE) *(replace this link after recording)*
+> 🎥 **Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/2b4d25ef4c6740b680c7a8445563e463)
 > 
 > 💻 **GitHub:** [DhivyaSriLingala/applied-ai-system-project](https://github.com/DhivyaSriLingala/applied-ai-system-project)
 
