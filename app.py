@@ -185,13 +185,20 @@ with tab_ai:
     analyze = st.button("🤖 Analyze & Fix", type="primary")
 
     if analyze:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        _has_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not _has_key:
             st.error(
-                "**ANTHROPIC_API_KEY is not set.** "
-                "Export it in your terminal before starting Streamlit:\n\n"
-                "```\nexport ANTHROPIC_API_KEY=sk-ant-...\n```"
+                "**No API key is set.** Set one in your terminal before starting Streamlit:\n\n"
+                "**Anthropic (Claude):**\n```\nset ANTHROPIC_API_KEY=sk-ant-...\n```\n\n"
+                "**Google Gemini (free tier):**\n```\nset GOOGLE_API_KEY=AIza...\n```"
             )
         else:
+            _provider_label = (
+                "Gemini 1.5 Flash (Google)" if os.environ.get("GOOGLE_API_KEY")
+                else "Claude claude-sonnet-4-6 (Anthropic)"
+            )
+            st.caption(f"🤖 Provider: {_provider_label}")
+
             logger.info(
                 "AI Bug Inspector triggered | mode=%s | code_len=%d",
                 agent_mode, len(code_input),

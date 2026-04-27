@@ -61,6 +61,16 @@ logger = setup_logger("ai_bug_inspector")
 MAX_CODE_CHARS = 5_000
 MIN_CODE_CHARS = 5
 MODEL = "claude-sonnet-4-6"
+GEMINI_MODEL = "gemini-1.5-flash"
+
+
+def _detect_provider() -> str:
+    """Return 'anthropic' or 'gemini' based on which API key is set."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.environ.get("GOOGLE_API_KEY"):
+        return "gemini"
+    return "anthropic"  # default (will fail with clear error)
 
 # Confidence parsing
 _CONF_RE   = re.compile(r"\nCONFIDENCE:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
@@ -78,7 +88,17 @@ class DebuggingAgent:
 
     def __init__(self):
         self.rag = RAGEngine()
-        self.client = anthropic.Anthropic()
+        self._provider = _detect_provider()
+
+        if self._provider == "gemini":
+            from google import genai
+            self._gemini_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+            self.client = None
+            logger.info("Using Gemini provider (%s)", GEMINI_MODEL)
+        else:
+            self.client = anthropic.Anthropic()
+            self._gemini_client = None
+            logger.info("Using Anthropic provider (%s)", MODEL)
 
     # ------------------------------------------------------------------
     # Guardrails
@@ -104,24 +124,40 @@ class DebuggingAgent:
     # ------------------------------------------------------------------
 
     def _call_claude(self, system: str, user: str, step_name: str) -> str:
-        """Single-turn Claude call. Logs latency and token counts."""
-        logger.info("[%s] Calling Claude (%s)", step_name, MODEL)
+        """Single-turn LLM call (Anthropic or Gemini). Logs latency."""
         start = time.time()
 
-        response = self.client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
+        if self._provider == "gemini":
+            logger.info("[%s] Calling Gemini (%s)", step_name, GEMINI_MODEL)
+            from google import genai
+            from google.genai import types as genai_types
+            response = self._gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=user,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system,
+                    max_output_tokens=1024,
+                ),
+            )
+            text = response.text
+            elapsed = time.time() - start
+            logger.info("[%s] %.2fs | %d chars", step_name, elapsed, len(text))
+        else:
+            logger.info("[%s] Calling Claude (%s)", step_name, MODEL)
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            elapsed = time.time() - start
+            text = response.content[0].text
+            logger.info(
+                "[%s] %.2fs | %d chars | in=%d out=%d tokens",
+                step_name, elapsed, len(text),
+                response.usage.input_tokens, response.usage.output_tokens,
+            )
 
-        elapsed = time.time() - start
-        text = response.content[0].text
-        logger.info(
-            "[%s] %.2fs | %d chars | in=%d out=%d tokens",
-            step_name, elapsed, len(text),
-            response.usage.input_tokens, response.usage.output_tokens,
-        )
         logger.debug("[%s] Full response:\n%s", step_name, text)
         return text
 
@@ -338,10 +374,10 @@ class DebuggingAgent:
             fixed_code    = self._step_fix(code, diagnosis)
             raw_verify    = self._step_verify(code, fixed_code, diagnosis)
             verification  = self._parse_verify(raw_verify)
-        except anthropic.APIError as exc:
-            logger.error("Anthropic API error: %s", exc)
+        except (anthropic.APIError, Exception) as exc:
+            logger.error("API error: %s", exc)
             return {
-                "error": f"Claude API error: {exc}",
+                "error": f"API error: {exc}",
                 "plan": None, "diagnosis": None, "fixed_code": None,
                 "context": context_chunks, "confidence": None,
                 "confidence_reason": None, "verification": None,
