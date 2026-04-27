@@ -61,7 +61,7 @@ logger = setup_logger("ai_bug_inspector")
 MAX_CODE_CHARS = 5_000
 MIN_CODE_CHARS = 5
 MODEL = "claude-sonnet-4-6"
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def _detect_provider() -> str:
