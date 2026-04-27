@@ -463,7 +463,7 @@ applied-ai-system-project/
 
 **GitHub:** [github.com/DhivyaSriLingala/applied-ai-system-project](https://github.com/DhivyaSriLingala/applied-ai-system-project)
 
-**Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/YOUR_LOOM_LINK_HERE) *(replace after recording)*
+**Video Walkthrough:** [Watch on Loom](https://www.loom.com/share/2b4d25ef4c6740b680c7a8445563e463)
 
 ### What this project says about me as an AI engineer
 
